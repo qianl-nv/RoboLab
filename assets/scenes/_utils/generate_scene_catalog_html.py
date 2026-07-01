@@ -97,13 +97,24 @@ def get_table_payloads(prims: list) -> list[str]:
     return []
 
 
-def format_table_payload(prims: list) -> str:
+def escape_soft_break(text: str) -> str:
+    """Insert <wbr> so long paths wrap in GitHub HTML tables without horizontal scroll."""
+    escaped = html.escape(text)
+    return escaped.replace("/", "/<wbr>").replace("_", "_<wbr>")
+
+
+def format_table_payload(prims: list, *, for_markdown: bool = False) -> str:
     payloads = get_table_payloads(prims)
     if not payloads:
         return '<code>""</code>'
     if len(payloads) == 1:
-        return f"<code>{html.escape(payloads[0])}</code>"
-    items = "".join(f"<li><code>{html.escape(pl)}</code></li>" for pl in payloads)
+        pl = payloads[0]
+        inner = escape_soft_break(pl) if for_markdown else html.escape(pl)
+        return f"<code>{inner}</code>"
+    items = "".join(
+        f"<li><code>{escape_soft_break(pl) if for_markdown else html.escape(pl)}</code></li>"
+        for pl in payloads
+    )
     return f"<ul>{items}</ul>"
 
 
@@ -295,7 +306,7 @@ def count_scene_objects(prims: list) -> int:
     )
 
 
-def build_payloads(prims: list) -> str:
+def build_payloads(prims: list, *, for_markdown: bool = False) -> str:
     rows = []
     for p in prims:
         name = p.get("name", "?")
@@ -305,19 +316,22 @@ def build_payloads(prims: list) -> str:
         if not payloads:
             continue
         for pl in payloads:
-            rows.append(f"<li><code>{html.escape(name)}</code> → <code>{html.escape(pl)}</code></li>")
+            name_html = escape_soft_break(name) if for_markdown else html.escape(name)
+            pl_html = escape_soft_break(pl) if for_markdown else html.escape(pl)
+            rows.append(f"<li><code>{name_html}</code> → <code>{pl_html}</code></li>")
     if not rows:
         return "<em>No payloads listed.</em>"
     return "<ul>" + "".join(rows) + "</ul>"
 
 
-def build_task_list(tasks: list[dict]) -> str:
+def build_task_list(tasks: list[dict], *, for_markdown: bool = False) -> str:
     items = []
     for t in sorted(tasks, key=lambda x: x["task_name"]):
+        file_html = escape_soft_break(t["file"]) if for_markdown else html.escape(t["file"])
         items.append(
             "<li>"
             f"<strong>{html.escape(t['task_name'])}</strong><br>"
-            f"<code>{html.escape(t['file'])}</code><br>"
+            f"<code>{file_html}</code><br>"
             f"{html.escape(t['instruction'])}"
             "</li>"
         )
@@ -347,6 +361,8 @@ def build_catalog_table_rows(
     scenes: list[str],
     tasks_by_scene: dict[str, list[dict]],
     scene_meta: dict,
+    *,
+    for_markdown: bool = False,
 ) -> list[str]:
     rows = []
     for scene_file in scenes:
@@ -354,22 +370,55 @@ def build_catalog_table_rows(
         prims_list = prims if isinstance(prims, list) else []
         num_objects = count_scene_objects(prims_list)
         img_rel = scene_image_rel(scene_file)
-        img_cell = (
-            f'<img src="{html.escape(img_rel)}" alt="{html.escape(scene_file)}" width="180" />'
-            if img_rel else "<em>No snapshot available</em>"
+        if img_rel:
+            if for_markdown:
+                img_cell = (
+                    f'<img src="{html.escape(img_rel)}" alt="{html.escape(scene_file)}" '
+                    f'width="100%" />'
+                )
+            else:
+                img_cell = (
+                    f'<img src="{html.escape(img_rel)}" alt="{html.escape(scene_file)}" '
+                    f'loading="lazy" />'
+                )
+        else:
+            img_cell = "<em>No snapshot available</em>"
+
+        scene_html = (
+            f"<small><code>{escape_soft_break(scene_file)}</code></small>"
+            if for_markdown
+            else f"<code>{html.escape(scene_file)}</code>"
         )
         rows.append(
             "<tr>"
-            f'<td valign="top"><code>{html.escape(scene_file)}</code></td>'
-            f'<td valign="top">{img_cell}</td>'
-            f'<td valign="top" align="center">{num_objects}</td>'
-            f'<td valign="top">{format_table_payload(prims_list)}</td>'
-            f'<td valign="top">{build_payloads(prims_list)}</td>'
-            f'<td valign="top">{build_task_list(tasks_by_scene[scene_file])}</td>'
-            f'<td valign="top">{build_prompt_list(tasks_by_scene[scene_file])}</td>'
+            f'<td class="scene-name" valign="top">{scene_html}</td>'
+            f'<td class="snapshot" valign="top">{img_cell}</td>'
+            f'<td class="object-count" valign="top" align="center">{num_objects}</td>'
+            f'<td class="table-payload" valign="top">'
+            f"{format_table_payload(prims_list, for_markdown=for_markdown)}</td>"
+            f'<td class="payloads" valign="top">'
+            f"{build_payloads(prims_list, for_markdown=for_markdown)}</td>"
+            f'<td class="tasks" valign="top">'
+            f"{build_task_list(tasks_by_scene[scene_file], for_markdown=for_markdown)}</td>"
+            f'<td class="prompts" valign="top">'
+            f"{build_prompt_list(tasks_by_scene[scene_file])}</td>"
             "</tr>"
         )
     return rows
+
+
+# GitHub markdown: fixed layout, narrow scene col, snapshot 3× scene width (5% → 15%).
+MD_TABLE_COLGROUP = """
+<colgroup>
+  <col width="3%" />
+  <col width="25%" />
+  <col width="2%" />
+  <col width="3%" />
+  <col width="17%" />
+  <col width="17%" />
+  <col width="32%" />
+</colgroup>
+"""
 
 
 CATALOG_TABLE_HEAD = """
@@ -390,8 +439,8 @@ CATALOG_TABLE_HEAD = """
 def wrap_catalog_table(rows: list[str]) -> str:
     """HTML table for GitHub markdown preview (pipe tables cannot fit this layout)."""
     return (
-        '<table border="1" cellpadding="8" cellspacing="0" width="100%">'
-        f"{CATALOG_TABLE_HEAD}<tbody>{''.join(rows)}</tbody></table>"
+        '<table border="1" cellpadding="4" cellspacing="0" width="100%">'
+        f"{MD_TABLE_COLGROUP}{CATALOG_TABLE_HEAD}<tbody>{''.join(rows)}</tbody></table>"
     )
 
 
