@@ -343,24 +343,56 @@ def scene_image_rel(scene_file: str) -> str | None:
     return None
 
 
-def table_payload_md(prims: list) -> str:
-    payloads = get_table_payloads(prims)
-    if not payloads:
-        return '""'
-    if len(payloads) == 1:
-        return f"`{payloads[0]}`"
-    return ", ".join(f"`{p}`" for p in payloads)
+def build_catalog_table_rows(
+    scenes: list[str],
+    tasks_by_scene: dict[str, list[dict]],
+    scene_meta: dict,
+) -> list[str]:
+    rows = []
+    for scene_file in scenes:
+        prims = scene_meta.get(scene_file, [])
+        prims_list = prims if isinstance(prims, list) else []
+        num_objects = count_scene_objects(prims_list)
+        img_rel = scene_image_rel(scene_file)
+        img_cell = (
+            f'<img src="{html.escape(img_rel)}" alt="{html.escape(scene_file)}" width="180" />'
+            if img_rel else "<em>No snapshot available</em>"
+        )
+        rows.append(
+            "<tr>"
+            f'<td valign="top"><code>{html.escape(scene_file)}</code></td>'
+            f'<td valign="top">{img_cell}</td>'
+            f'<td valign="top" align="center">{num_objects}</td>'
+            f'<td valign="top">{format_table_payload(prims_list)}</td>'
+            f'<td valign="top">{build_payloads(prims_list)}</td>'
+            f'<td valign="top">{build_task_list(tasks_by_scene[scene_file])}</td>'
+            f'<td valign="top">{build_prompt_list(tasks_by_scene[scene_file])}</td>'
+            "</tr>"
+        )
+    return rows
 
 
-def object_payload_lines_md(prims: list) -> list[str]:
-    lines = []
-    for p in prims:
-        name = p.get("name", "?")
-        if name in STATIC_INFRA:
-            continue
-        for pl in p.get("payload") or []:
-            lines.append(f"- `{name}` → `{pl}`")
-    return lines
+CATALOG_TABLE_HEAD = """
+<thead>
+  <tr>
+    <th>Scene (.usda)</th>
+    <th>Snapshot</th>
+    <th>Objects</th>
+    <th>Table payload</th>
+    <th>Object payloads</th>
+    <th>Benchmark tasks</th>
+    <th>Arena env prompt</th>
+  </tr>
+</thead>
+"""
+
+
+def wrap_catalog_table(rows: list[str]) -> str:
+    """HTML table for GitHub markdown preview (pipe tables cannot fit this layout)."""
+    return (
+        '<table border="1" cellpadding="8" cellspacing="0" width="100%">'
+        f"{CATALOG_TABLE_HEAD}<tbody>{''.join(rows)}</tbody></table>"
+    )
 
 
 def load_task_meta() -> dict[str, dict]:
@@ -465,28 +497,7 @@ HTML_STYLE = """
 
 def generate_catalog_html(spec: CatalogSpec) -> Path:
     scenes, tasks_by_scene, scene_meta, task_count = collect_catalog_data(spec.key)
-
-    rows = []
-    for scene_file in scenes:
-        prims = scene_meta.get(scene_file, [])
-        prims_list = prims if isinstance(prims, list) else []
-        num_objects = count_scene_objects(prims_list)
-        img_rel = scene_image_rel(scene_file)
-        img_cell = (
-            f'<img src="{html.escape(img_rel)}" alt="{html.escape(scene_file)}" loading="lazy" />'
-            if img_rel else "<em>No snapshot available</em>"
-        )
-        rows.append(
-            "<tr>"
-            f"<td class=\"scene-name\"><code>{html.escape(scene_file)}</code></td>"
-            f"<td class=\"snapshot\">{img_cell}</td>"
-            f"<td class=\"object-count\">{num_objects}</td>"
-            f"<td class=\"table-payload\">{format_table_payload(prims_list)}</td>"
-            f"<td class=\"payloads\">{build_payloads(prims_list)}</td>"
-            f"<td class=\"tasks\">{build_task_list(tasks_by_scene[scene_file])}</td>"
-            f"<td class=\"prompts\">{build_prompt_list(tasks_by_scene[scene_file])}</td>"
-            "</tr>"
-        )
+    rows = build_catalog_table_rows(scenes, tasks_by_scene, scene_meta)
 
     out_path = METADATA_DIR / spec.out_name
     content = f"""<!DOCTYPE html>
@@ -506,17 +517,7 @@ def generate_catalog_html(spec: CatalogSpec) -> Path:
     Prompts target <code>EnvironmentGenerationAgent.generate_spec()</code> with the DROID embodiment.
   </p>
   <table>
-    <thead>
-      <tr>
-        <th>Scene (.usda)</th>
-        <th>Snapshot</th>
-        <th>Objects</th>
-        <th>Table payload</th>
-        <th>Object payloads</th>
-        <th>Benchmark tasks</th>
-        <th>Arena env prompt</th>
-      </tr>
-    </thead>
+    {CATALOG_TABLE_HEAD}
     <tbody>
       {''.join(rows)}
     </tbody>
@@ -530,6 +531,7 @@ def generate_catalog_html(spec: CatalogSpec) -> Path:
 
 def generate_catalog_markdown(spec: CatalogSpec) -> Path:
     scenes, tasks_by_scene, scene_meta, task_count = collect_catalog_data(spec.key)
+    rows = build_catalog_table_rows(scenes, tasks_by_scene, scene_meta)
 
     parts = [
         f"# {spec.heading}",
@@ -540,46 +542,9 @@ def generate_catalog_markdown(spec: CatalogSpec) -> Path:
         "",
         "Prompts target `EnvironmentGenerationAgent.generate_spec()` with the DROID embodiment.",
         "",
+        wrap_catalog_table(rows),
+        "",
     ]
-
-    for scene_file in scenes:
-        prims_list = scene_meta.get(scene_file, [])
-        if not isinstance(prims_list, list):
-            prims_list = []
-        num_objects = count_scene_objects(prims_list)
-        parts.extend(["---", "", f"## {scene_file}", ""])
-
-        img_rel = scene_image_rel(scene_file)
-        if img_rel:
-            parts.append(f"![{scene_file}]({img_rel})")
-            parts.append("")
-
-        parts.extend(
-            [
-                f"- **Objects:** {num_objects}",
-                f"- **Table payload:** {table_payload_md(prims_list)}",
-                "",
-                "### Object payloads",
-                "",
-            ]
-        )
-        payload_lines = object_payload_lines_md(prims_list)
-        parts.extend(payload_lines or ["_No payloads listed._", ""])
-        if payload_lines:
-            parts.append("")
-
-        parts.extend(["### Benchmark tasks", ""])
-        for task in sorted(tasks_by_scene[scene_file], key=lambda x: x["task_name"]):
-            parts.extend(
-                [
-                    f"#### {task['task_name']}",
-                    "",
-                    f"- **File:** `{task['file']}`",
-                    f"- **Instruction:** {task['instruction']}",
-                    f"- **Arena env prompt:** {task['prompt']}",
-                    "",
-                ]
-            )
 
     out_path = METADATA_DIR / spec.md_out_name
     out_path.write_text("\n".join(parts), encoding="utf-8")
