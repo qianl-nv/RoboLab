@@ -357,6 +357,12 @@ def scene_image_rel(scene_file: str) -> str | None:
     return None
 
 
+# Snapshot dimensions (single source of truth for HTML CSS and embedded markdown tables).
+SNAPSHOT_IMG_WIDTH_PX = 180
+SNAPSHOT_IMG_HEIGHT_PX = 140
+SNAPSHOT_COL_WIDTH_PX = 200
+
+
 def build_catalog_table_rows(
     scenes: list[str],
     tasks_by_scene: dict[str, list[dict]],
@@ -371,16 +377,11 @@ def build_catalog_table_rows(
         num_objects = count_scene_objects(prims_list)
         img_rel = scene_image_rel(scene_file)
         if img_rel:
-            if for_markdown:
-                img_cell = (
-                    f'<img src="{html.escape(img_rel)}" alt="{html.escape(scene_file)}" '
-                    f'width="100%" />'
-                )
-            else:
-                img_cell = (
-                    f'<img src="{html.escape(img_rel)}" alt="{html.escape(scene_file)}" '
-                    f'loading="lazy" />'
-                )
+            lazy = "" if for_markdown else ' loading="lazy"'
+            img_cell = (
+                f'<img src="{html.escape(img_rel)}" alt="{html.escape(scene_file)}" '
+                f'width="{SNAPSHOT_IMG_WIDTH_PX}" height="{SNAPSHOT_IMG_HEIGHT_PX}"{lazy} />'
+            )
         else:
             img_cell = "<em>No snapshot available</em>"
 
@@ -407,16 +408,16 @@ def build_catalog_table_rows(
     return rows
 
 
-# GitHub markdown: fixed layout, narrow scene col, snapshot 3× scene width (5% → 15%).
-MD_TABLE_COLGROUP = """
+# Column widths for remaining columns; Snapshot column width matches HTML `.snapshot`.
+MD_TABLE_COLGROUP = f"""
 <colgroup>
+  <col width="5%" />
+  <col width="{SNAPSHOT_COL_WIDTH_PX}" />
   <col width="3%" />
-  <col width="25%" />
-  <col width="2%" />
-  <col width="3%" />
+  <col width="8%" />
   <col width="17%" />
   <col width="17%" />
-  <col width="32%" />
+  <col width="35%" />
 </colgroup>
 """
 
@@ -518,16 +519,18 @@ HTML_STYLE = """
       z-index: 1;
     }
     .scene-name { width: 10rem; word-break: break-word; }
-    .snapshot { width: 200px; }
-    .object-count { width: 4rem; text-align: center; }
-    .table-payload { width: 12%; }
-    .snapshot img {
-      max-width: 180px;
-      max-height: 140px;
+""" + f"""
+    .snapshot {{ width: {SNAPSHOT_COL_WIDTH_PX}px; }}
+    .object-count {{ width: 4rem; text-align: center; }}
+    .table-payload {{ width: 12%; }}
+    .snapshot img {{
+      max-width: {SNAPSHOT_IMG_WIDTH_PX}px;
+      max-height: {SNAPSHOT_IMG_HEIGHT_PX}px;
       display: block;
       border-radius: 4px;
       border: 1px solid var(--border);
-    }
+    }}
+""" + """
     .payloads { width: 22%; }
     .tasks { width: 20%; }
     .prompts { width: 28%; }
@@ -580,7 +583,7 @@ def generate_catalog_html(spec: CatalogSpec) -> Path:
 
 def generate_catalog_markdown(spec: CatalogSpec) -> Path:
     scenes, tasks_by_scene, scene_meta, task_count = collect_catalog_data(spec.key)
-    rows = build_catalog_table_rows(scenes, tasks_by_scene, scene_meta)
+    rows = build_catalog_table_rows(scenes, tasks_by_scene, scene_meta, for_markdown=True)
 
     parts = [
         f"# {spec.heading}",
