@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate HTML scene catalogs for RoboLab benchmark tasks by pick-and-place category."""
+"""Generate HTML and Markdown scene catalogs for RoboLab benchmark tasks."""
 
 from __future__ import annotations
 
@@ -34,6 +34,11 @@ class CatalogSpec:
     page_title: str
     heading: str
     filter_description: str
+    filter_description_md: str
+
+    @property
+    def md_out_name(self) -> str:
+        return Path(self.out_name).with_suffix(".md").name
 
 
 CATALOGS = (
@@ -46,6 +51,10 @@ CATALOGS = (
             "Filter: exactly one <code>pick_and_place</code> or "
             "<code>pick_and_place_on_surface</code> subtask with a single object."
         ),
+        filter_description_md=(
+            "Filter: exactly one `pick_and_place` or `pick_and_place_on_surface` "
+            "subtask with a single object."
+        ),
     ),
     CatalogSpec(
         key="multi",
@@ -56,6 +65,10 @@ CATALOGS = (
             "Filter: <code>pick_and_place</code> or <code>pick_and_place_on_surface</code> "
             "with multiple objects and/or multiple subtasks."
         ),
+        filter_description_md=(
+            "Filter: `pick_and_place` or `pick_and_place_on_surface` with multiple objects "
+            "and/or multiple subtasks."
+        ),
     ),
     CatalogSpec(
         key="other",
@@ -65,6 +78,10 @@ CATALOGS = (
         filter_description=(
             "Filter: benchmark tasks without <code>pick_and_place</code> / "
             "<code>pick_and_place_on_surface</code> (stacking, reorientation, spatial, etc.)."
+        ),
+        filter_description_md=(
+            "Filter: benchmark tasks without `pick_and_place` / `pick_and_place_on_surface` "
+            "(stacking, reorientation, spatial, etc.)."
         ),
     ),
 )
@@ -326,6 +343,26 @@ def scene_image_rel(scene_file: str) -> str | None:
     return None
 
 
+def table_payload_md(prims: list) -> str:
+    payloads = get_table_payloads(prims)
+    if not payloads:
+        return '""'
+    if len(payloads) == 1:
+        return f"`{payloads[0]}`"
+    return ", ".join(f"`{p}`" for p in payloads)
+
+
+def object_payload_lines_md(prims: list) -> list[str]:
+    lines = []
+    for p in prims:
+        name = p.get("name", "?")
+        if name in STATIC_INFRA:
+            continue
+        for pl in p.get("payload") or []:
+            lines.append(f"- `{name}` → `{pl}`")
+    return lines
+
+
 def load_task_meta() -> dict[str, dict]:
     return {
         t["task_name"]: t
@@ -491,8 +528,68 @@ def generate_catalog_html(spec: CatalogSpec) -> Path:
     return out_path
 
 
+def generate_catalog_markdown(spec: CatalogSpec) -> Path:
+    scenes, tasks_by_scene, scene_meta, task_count = collect_catalog_data(spec.key)
+
+    parts = [
+        f"# {spec.heading}",
+        "",
+        f"{len(scenes)} benchmark scenes · {task_count} tasks",
+        "",
+        spec.filter_description_md,
+        "",
+        "Prompts target `EnvironmentGenerationAgent.generate_spec()` with the DROID embodiment.",
+        "",
+    ]
+
+    for scene_file in scenes:
+        prims_list = scene_meta.get(scene_file, [])
+        if not isinstance(prims_list, list):
+            prims_list = []
+        num_objects = count_scene_objects(prims_list)
+        parts.extend(["---", "", f"## {scene_file}", ""])
+
+        img_rel = scene_image_rel(scene_file)
+        if img_rel:
+            parts.append(f"![{scene_file}]({img_rel})")
+            parts.append("")
+
+        parts.extend(
+            [
+                f"- **Objects:** {num_objects}",
+                f"- **Table payload:** {table_payload_md(prims_list)}",
+                "",
+                "### Object payloads",
+                "",
+            ]
+        )
+        payload_lines = object_payload_lines_md(prims_list)
+        parts.extend(payload_lines or ["_No payloads listed._", ""])
+        if payload_lines:
+            parts.append("")
+
+        parts.extend(["### Benchmark tasks", ""])
+        for task in sorted(tasks_by_scene[scene_file], key=lambda x: x["task_name"]):
+            parts.extend(
+                [
+                    f"#### {task['task_name']}",
+                    "",
+                    f"- **File:** `{task['file']}`",
+                    f"- **Instruction:** {task['instruction']}",
+                    f"- **Arena env prompt:** {task['prompt']}",
+                    "",
+                ]
+            )
+
+    out_path = METADATA_DIR / spec.md_out_name
+    out_path.write_text("\n".join(parts), encoding="utf-8")
+    return out_path
+
+
 if __name__ == "__main__":
     for catalog in CATALOGS:
-        path = generate_catalog_html(catalog)
+        html_path = generate_catalog_html(catalog)
+        md_path = generate_catalog_markdown(catalog)
         scenes, _, _, task_count = collect_catalog_data(catalog.key)
-        print(f"Wrote {path} ({len(scenes)} scenes, {task_count} tasks)")
+        print(f"Wrote {html_path} ({len(scenes)} scenes, {task_count} tasks)")
+        print(f"Wrote {md_path} ({md_path.stat().st_size / 1024:.1f} KB)")
